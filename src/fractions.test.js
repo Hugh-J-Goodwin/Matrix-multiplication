@@ -23,17 +23,22 @@ test('rank rows by exact totals with competition ties and negative scores',()=>{
  const close=rankRows([[rational('1/3')],[rational('3333333333333333/10000000000000000')]],['Exact','Rounded']);
  assert.deepEqual(close.map(r=>r.rank),[1,2]);
 });
-test('migrate saved projects and resize all three matrices and shared names',()=>{
+test('migrate saved projects into extensible matrices and resize shared data',()=>{
  const legacy={size:2,a:[[1,2],[3,4]],b:[[5,6],[7,8]]};
  const migrated=normalizeProject(legacy);
- assert.deepEqual(migrated.c,[[0,0],[0,0]]);
+ assert.equal(migrated.matrices.length,2);
+ assert.equal(migrated.matrices[1].enabled,false);
  migrated.labels=['Alpha','Beta'];
- const bigger=resizeProject(migrated,3);
+ const bigger={...migrated,...resizeProject(migrated,3)};
  assert.deepEqual(bigger.labels,['Alpha','Beta','Item 3']);
- assert.deepEqual(bigger.a,[[1,2,0],[3,4,0],[0,0,0]]);
- assert.equal(bigger.c.length,3);
+ assert.deepEqual(bigger.matrices[0].values,[[1,2,0],[3,4,0],[0,0,0]]);
+ assert.equal(bigger.matrices[1].values.length,3);
  assert.deepEqual(resizeProject(bigger,1).labels,['Alpha']);
- assert.equal(normalizeProject({...migrated,tertiary:true}).tertiary,true);
+ const savedC=normalizeProject({...legacy,c:[[9,0],[0,0]],tertiary:true});
+ assert.equal(savedC.matrices[2].name,'Matrix 3');
+ assert.equal(savedC.matrices[2].values[0][0],9);
+ assert.equal(savedC.matrices[2].enabled,true);
+ assert.deepEqual(normalizeProject(savedC),savedC);
 });
 test('exports include matching named axes and fraction values with escaped labels',()=>{
  assert.equal(matrixDelimited([[rational('1/3')]],['A, "name"']), '"","A, ""name"""\n"A, ""name""","1/3"');

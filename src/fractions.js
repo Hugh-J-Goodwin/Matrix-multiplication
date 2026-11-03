@@ -102,9 +102,20 @@ export function rankRows(matrix, names) {
     return { ...row, rank };
   });
 }
-export function matrixDelimited(matrix, names, separator = ',') {
+export function matrixDelimited(matrix, names, separator = ',', formatter = fractionText) {
   names = names.map((name, index) => name || `Item ${index + 1}`);
   const escape = value => '"' + String(value).replaceAll('"', '""') + '"';
-  return [['', ...names], ...matrix.map((row, i) => [names[i], ...row.map(fractionText)])]
+  return [['', ...names], ...matrix.map((row, i) => [names[i], ...row.map(formatter)])]
     .map(row => row.map(escape).join(separator)).join('\n');
+}
+
+export function calculateSeries(matrices) {
+  const included = matrices.filter(matrix => matrix.enabled);
+  if (!included.length) throw Error('Include at least one matrix.');
+  return included.reduce((total, matrix) => {
+    let value;
+    try { value = calculateFractions(matrix.values, matrix.order, matrix.rule, matrix.cumulative); }
+    catch (error) { throw Error(`${matrix.name}: ${error.message}`); }
+    return total ? addFractions(total, value) : value;
+  }, null);
 }
