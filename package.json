@@ -5,10 +5,11 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "test": "node src/matrix.test.js"
+    "test": "node src/test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
+    "fraction.js": "^5.3.4",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
