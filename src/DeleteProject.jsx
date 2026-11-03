@@ -1,0 +1,10 @@
+import React,{useEffect,useRef,useState} from 'react';
+import{Trash2,X}from'lucide-react';
+export function DeleteProject({project,cloud,onConfirm,onClose}){
+ const [busy,setBusy]=useState(false),[error,setError]=useState('');
+ const dialog=useRef(null),cancel=useRef(null);
+ useEffect(()=>{const previous=document.activeElement;cancel.current?.focus();return()=>previous?.focus();},[]);
+ useEffect(()=>{const key=event=>{if(event.key==='Escape'&&!busy)onClose();if(event.key==='Tab'){const buttons=[...dialog.current.querySelectorAll('button:not(:disabled)')],first=buttons[0],last=buttons.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}};document.addEventListener('keydown',key);return()=>document.removeEventListener('keydown',key);},[busy,onClose]);
+ async function confirm(){setBusy(true);setError('');try{await onConfirm();}catch(err){setError(err.message);}finally{setBusy(false);}}
+ return <div className="modal-backdrop" onClick={()=>{if(!busy)onClose();}}><div ref={dialog} className="modal delete-project-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-project-title" aria-describedby="delete-project-description" onClick={event=>event.stopPropagation()}><button className="close" aria-label="Close" disabled={busy} onClick={onClose}><X size={20}/></button><span className="delete-project-icon"><Trash2 size={22}/></span><h2 id="delete-project-title">Delete project?</h2><p id="delete-project-description">Delete <strong>{project.name}</strong> {cloud?'from your account and this device':'from this device'}? All its matrices and settings will be removed.</p>{error&&<p className="error" role="alert">{error}</p>}<div className="delete-project-actions"><button ref={cancel} className="button secondary" disabled={busy} onClick={onClose}>Cancel</button><button className="button danger" disabled={busy} onClick={confirm}><Trash2 size={15}/>{busy?'Deleting…':'Delete project'}</button></div></div></div>;
+}

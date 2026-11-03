@@ -8,6 +8,8 @@ import{normalizeProject,resizeProject,sharedNames,newMatrix}from'./project';
 import{formatNumber,precisionKey}from'./format';
 import{MatrixEditor,ExpandedMatrix}from'./MatrixView';
 import{OperationCard,CombinedPreview}from'./Operations';
+import{DeleteProject}from'./DeleteProject';
+import{createWriteQueue}from'./cloud-writes';
 import './style.css';
 
 const sample=[[0,1,1,0,1],[0,0,1,1,0],[0,0,0,1,1],[1,0,0,0,1],[0,1,0,0,0]];
@@ -20,6 +22,8 @@ function App(){
  const[modal,setModal]=useState(null),[expanded,setExpanded]=useState(null),[result,setResult]=useState(null),[error,setError]=useState(''),[removed,setRemoved]=useState(null);
  const[user,setUser]=useState(null),[sync,setSync]=useState('Saved locally');
  const[collapsed,setCollapsed]=useState(()=>localStorage.getItem('dominant-sidebar')==='collapsed'),[mobile,setMobile]=useState(false),[smallScreen,setSmallScreen]=useState(()=>window.innerWidth<=640);
+ const[deleting,setDeleting]=useState(null),[deleted,setDeleted]=useState(null);
+ const cloudWrite=useRef(createWriteQueue()),saveTimer=useRef(null),deletedIds=useRef(new Set());
  const ready=useRef(false),project=projects.find(value=>value.id===active)||projects[0];
  const current=project.matrices.find(matrix=>matrix.id===matrixId)||project.matrices[0];
  const labels=sharedNames(project),display=project.display;
@@ -33,6 +37,27 @@ function App(){
  function addMatrix(){const next=newMatrix(project.size,project.nextMatrixNumber);patch({matrices:[...project.matrices,next],nextMatrixNumber:project.nextMatrixNumber+1});setMatrixId(next.id);}
  function removeMatrix(matrix){if(project.matrices.length===1)return;setRemoved({matrix,index:project.matrices.findIndex(value=>value.id===matrix.id),projectId:project.id});patch({matrices:project.matrices.filter(value=>value.id!==matrix.id)});if(current.id===matrix.id)setMatrixId(null);}
  function undoRemove(){if(!removed||removed.projectId!==project.id)return;const matrices=[...project.matrices];matrices.splice(removed.index,0,removed.matrix);patch({matrices});setRemoved(null);}
+ async function deleteProject(){
+  const target=deleting;
+  if(!target)return;
+  if(user&&supabase&&!ready.current)throw Error('Cloud sync is unavailable. Reconnect before deleting this project.');
+  clearTimeout(saveTimer.current);
+  deletedIds.current.add(target.id);
+  try{
+   if(user&&supabase){const response=await cloudWrite.current(()=>supabase.from('projects').delete().eq('id',target.id).eq('user_id',user.id));if(response.error)throw Error(`Could not delete the cloud project: ${response.error.message}`);}
+   setDeleted({project:target,index:projects.findIndex(value=>value.id===target.id)});
+   const blank=fresh();blank.name='Untitled project';blank.matrices=blank.matrices.map(matrix=>({...matrix,values:zero(blank.size)}));
+   setProjects(previous=>{const remaining=previous.filter(value=>value.id!==target.id);return remaining.length?remaining:[blank];});
+   if(project.id===target.id)selectProject(null);
+   setDeleting(null);
+  }catch(err){deletedIds.current.delete(target.id);setProjects(previous=>[...previous]);throw err;}
+ }
+ function undoDeleteProject(){
+  if(!deleted)return;
+  deletedIds.current.delete(deleted.project.id);
+  setProjects(previous=>{if(previous.some(value=>value.id===deleted.project.id))return previous;const next=[...previous];next.splice(Math.min(deleted.index,next.length),0,deleted.project);return next;});
+  selectProject(deleted.project.id);setDeleted(null);
+ }
  function run(){try{setResult(calculateSeries(project.matrices));setError('');}catch(err){setError(err.message);}}
  function resize(size){if(Number.isInteger(size)&&size>=1&&size<=25)patch(resizeProject(project,size));}
  function exportMatrix(){downloadText(matrixDelimited(result||current.values,labels,',',value=>formatNumber(value,display)),`${project.name}-${result?'result':current.name}.csv`);}
@@ -43,12 +68,12 @@ function App(){
   try{localStorage.setItem('dominant-projects',JSON.stringify(projects));}catch{setError('Device storage is full. Export your work or sign in to save it online.');}
   if(!supabase||!user||!ready.current)return;
   setSync('Syncing…');
-  const timer=setTimeout(async()=>{try{const{error}=await supabase.from('projects').upsert(projects.map(value=>({id:value.id,user_id:user.id,name:value.name,data:value,updated_at:new Date().toISOString()})));setSync(error?'Sync failed · saved locally':'All changes synced');if(error)setError(error.message);}catch{setSync('Sync failed · saved locally');}},900);
-  return()=>clearTimeout(timer);
+  const timer=setTimeout(async()=>{try{const response=await cloudWrite.current(()=>{const rows=projects.filter(value=>!deletedIds.current.has(value.id)).map(value=>({id:value.id,user_id:user.id,name:value.name,data:value,updated_at:new Date().toISOString()}));return rows.length?supabase.from('projects').upsert(rows):{error:null};});const{error}=response;setSync(error?'Sync failed · saved locally':'All changes synced');if(error)setError(error.message);}catch{setSync('Sync failed · saved locally');}},900);
+  saveTimer.current=timer;return()=>clearTimeout(timer);
  },[projects,user]);
  useEffect(()=>{
   if(!supabase)return;let live=true;
-  async function connect(session){ready.current=false;setUser(session?.user||null);if(!session){setSync('Saved locally');return;}try{const{data,error}=await supabase.from('projects').select('*').order('updated_at',{ascending:false});if(!live)return;if(error){setError(error.message);setSync('Cloud unavailable · saved locally');return;}if(data.length)setProjects(previous=>{const map=new Map(previous.map(value=>[value.id,value]));data.forEach(row=>map.set(row.id,normalizeProject(row.data)));return [...map.values()];});ready.current=true;setSync('All changes synced');setProjects(previous=>[...previous]);}catch{if(live)setSync('Cloud unavailable · saved locally');}}
+  async function connect(session){ready.current=false;setUser(session?.user||null);if(!session){setSync('Saved locally');return;}try{const{data,error}=await supabase.from('projects').select('*').order('updated_at',{ascending:false});if(!live)return;if(error){setError(error.message);setSync('Cloud unavailable · saved locally');return;}if(data.length)setProjects(previous=>{const map=new Map(previous.map(value=>[value.id,value]));data.forEach(row=>{if(!deletedIds.current.has(row.id))map.set(row.id,normalizeProject(row.data));});return [...map.values()];});ready.current=true;setSync('All changes synced');setProjects(previous=>[...previous]);}catch{if(live)setSync('Cloud unavailable · saved locally');}}
   supabase.auth.getSession().then(({data})=>connect(data.session));const{data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>setTimeout(()=>connect(session),0));return()=>{live=false;subscription.unsubscribe();};
  },[]);
  return <div className={`app ${collapsed?'sidebar-collapsed':''}`}>
@@ -57,7 +82,7 @@ function App(){
    <div className="brand-row"><a className="brand" href="#" onClick={event=>{event.preventDefault();setTab('workspace');}}><span className="brand-icon"><Grid2X2 size={20}/></span>dominant.</a><button className="icon-button" aria-label="Collapse sidebar" onClick={()=>{setCollapsed(true);setMobile(false);}}><PanelLeft size={18}/></button></div>
    <button className={`nav ${tab==='workspace'?'selected':''}`} onClick={()=>{setTab('workspace');setMobile(false);}}><Grid2X2 size={17}/>Workspace</button>
    <div className="side-heading">PROJECTS<button title="New project" aria-label="New project" onClick={create}><Plus size={16}/></button></div>
-   <div className="project-list">{projects.map(value=><button key={value.id} className={`project ${value.id===project.id?'active':''}`} onClick={()=>selectProject(value.id)}><Folder size={16}/><span>{value.name}</span>{value.id===project.id&&<span className="active-dot"/>}</button>)}</div>
+   <div className="project-list">{projects.map(value=><div key={value.id} className={`project-row ${value.id===project.id?'active':''}`}><button className={`project ${value.id===project.id?'active':''}`} onClick={()=>selectProject(value.id)}><Folder size={16}/><span>{value.name}</span>{value.id===project.id&&<span className="active-dot"/>}</button><button className="project-delete icon-button" aria-label={`Delete project ${value.name}`} title={`Delete ${value.name}`} onClick={()=>setDeleting(value)}><Trash2 size={14}/></button></div>)}</div>
    <button className="new-project" onClick={create}><Plus size={16}/>New project</button>
    <div className="side-bottom"><button className={`nav ${tab==='guide'?'selected':''}`} onClick={()=>{setTab('guide');setMobile(false);}}><BookOpen size={17}/>Guide</button><button className="profile" onClick={()=>setModal('auth')}><span className="avatar">{user?user.email[0].toUpperCase():'G'}</span><span><strong>{user?user.email.split('@')[0]:'Guest'}</strong><small>{user?'Cloud sync':'Saved on this device'}</small></span><Settings2 size={16}/></button></div>
   </aside>
@@ -65,6 +90,7 @@ function App(){
    <main>{tab==='guide'?<Guide/>:<>
     <div className="page-heading"><h1>Matrix workspace</h1><button className="button secondary" onClick={create}><Plus size={16}/>New project</button></div>
     <div className="project-bar"><div><Folder size={18}/><input aria-label="Project name" value={project.name} onChange={event=>patch({name:event.target.value},false)}/></div><button className="icon-button" aria-label="Duplicate project" title="Duplicate project" onClick={duplicate}><Copy size={17}/></button></div>
+    {deleted&&<div className="undo-message" role="status">Project “{deleted.project.name}” deleted.<button onClick={undoDeleteProject}>Undo delete</button><button className="icon-button" aria-label="Dismiss deleted project" onClick={()=>setDeleted(null)}><X size={14}/></button></div>}
     <DisplaySettings display={display} onChange={values=>patch({display:{...display,...values}},false)}/>
     {error&&<div className="error" role="alert">{error}<button aria-label="Dismiss error" onClick={()=>setError('')}><X size={14}/></button></div>}
     {removed?.projectId===project.id&&<div className="undo-message" role="status">{removed.matrix.name} removed.<button onClick={undoRemove}>Undo</button><button className="icon-button" aria-label="Dismiss undo" onClick={()=>setRemoved(null)}><X size={14}/></button></div>}
@@ -80,6 +106,7 @@ function App(){
    </>}</main>
   </div>
   {expanded&&(expanded==='result'?result:expandedMatrix)&&<ExpandedMatrix labels={labels} onRename={expanded==='result'?null:rename} display={display} name={expanded==='result'?'Result':expandedMatrix.name} matrix={expanded==='result'?result:expandedMatrix.values} onChange={expanded==='result'?null:values=>updateMatrix(expandedMatrix.id,{values})} close={()=>setExpanded(null)}/>}
+  {deleting&&<DeleteProject project={deleting} cloud={Boolean(user&&supabase)} onConfirm={deleteProject} onClose={()=>setDeleting(null)}/>}
   {modal&&<div className="modal-backdrop" onClick={()=>setModal(null)}><div className="modal" role="dialog" aria-modal="true" aria-label={modal==='auth'?'Account':'Paste matrix'} onClick={event=>event.stopPropagation()}><button className="close" aria-label="Close" onClick={()=>setModal(null)}><X size={20}/></button>{modal==='auth'?<Auth user={user} close={()=>setModal(null)}/>:<ImportMatrix apply={values=>{const resized=resizeProject(project,values.length);patch({...resized,matrices:resized.matrices.map(matrix=>matrix.id===current.id?{...matrix,values}:matrix)});setModal(null);}}/>}</div></div>}
  </div>;
 }
@@ -104,7 +131,7 @@ function ImportMatrix({apply}){
  return <><h2>Paste matrix</h2><p>Separate values with commas, spaces, or tabs. Put each row on a new line. Dimensions resize all matrices; overlapping values and names are kept.</p><textarea aria-label="Matrix values" rows={8} placeholder={'0, 1, 1\n0, 0, 1\n1, 0, 0'} value={text} onChange={event=>setText(event.target.value)}/>{error&&<p className="error">{error}</p>}<button className="button primary" onClick={()=>{const matrix=text.trim().split(/\n/).map(row=>row.trim().split(/[\s,;]+/).map(Number));if(!text.trim()||matrix.length>25||matrix.some(row=>row.length!==matrix.length||row.some(value=>!Number.isFinite(value))))return setError('Enter a square matrix of numbers, up to 25 × 25.');apply(matrix);}}>Use matrix</button></>;
 }
 function Guide(){
- const sections=[['Matrices','Choose dimensions from 1 × 1 to 25 × 25. Add matrix creates another input with the same dimensions and row/column names. Edit either axis name to rename it everywhere. Enter moves across rows; Shift+Enter moves back. Enter decimal or scientific values when editing a cell.'],['Calculations','Each matrix has the same controls. Set its maximum order (1–100), coefficient rule, and whether to include orders 1 through n. Use Include to select which series contribute to the final sum. Removing a matrix offers Undo.'],['Rules','Use 1 for Aⁿ, 3 for 3Aⁿ, or 1/(2^n) for Aⁿ / 2ⁿ. Rules support n, parentheses, +, -, *, /, and ^. Enter only the scalar coefficient. Function and series previews show the calculation.'],['Display and ranking','Choose decimal, fraction, or scientific notation. Each format remembers its precision. Decimal places range from 0 to 12; fractions can remain exact or be rounded before conversion. Editing shows the stored input value. Calculations and rankings always use exact fractions, regardless of display precision. Highest row total ranks first; equal totals share a rank.'],['Save and export','Projects save on this device. Sign in to sync them to your account. Expand any matrix to edit or copy it, use browser fullscreen, or save a PNG containing all rows and columns. CSV, copied values, and PNG use the selected number format. Avoid editing the same project on two devices at once.']];
+ const sections=[['Matrices','Choose dimensions from 1 × 1 to 25 × 25. Add matrix creates another input with the same dimensions and row/column names. Edit either axis name to rename it everywhere. Enter moves across rows; Shift+Enter moves back. Enter decimal or scientific values when editing a cell.'],['Calculations','Each matrix has the same controls. Set its maximum order (1–100), coefficient rule, and whether to include orders 1 through n. Use Include to select which series contribute to the final sum. Removing a matrix offers Undo. Delete a project with the sidebar trash icon, then confirm. Undo delete restores it. Deleting the last project opens a blank project.'],['Rules','Use 1 for Aⁿ, 3 for 3Aⁿ, or 1/(2^n) for Aⁿ / 2ⁿ. Rules support n, parentheses, +, -, *, /, and ^. Enter only the scalar coefficient. Function and series previews show the calculation.'],['Display and ranking','Choose decimal, fraction, or scientific notation. Each format remembers its precision. Decimal places range from 0 to 12; fractions can remain exact or be rounded before conversion. Editing shows the stored input value. Calculations and rankings always use exact fractions, regardless of display precision. Highest row total ranks first; equal totals share a rank.'],['Save and export','Projects save on this device. Sign in to sync them to your account. Expand any matrix to edit or copy it, use browser fullscreen, or save a PNG containing all rows and columns. CSV, copied values, and PNG use the selected number format. Avoid editing the same project on two devices at once.']];
  return <div className="guide"><h1>Guide</h1>{sections.map(([title,body])=><section key={title} className="card guide-card"><div><h2>{title}</h2><p>{body}</p></div></section>)}</div>;
 }
 createRoot(document.getElementById('root')).render(<App/>);
