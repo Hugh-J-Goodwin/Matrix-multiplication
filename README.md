@@ -33,6 +33,9 @@ Import this repository into Vercel. The included `vercel.json` selects Vite, bui
 - The coefficient is a scalar expression in `n`, using numbers, parentheses, `+`, `-`, `*`, `/`, and `^`. Example: `1/(2^n)` computes Aⁿ / 2ⁿ. No code evaluation is used.
 - Include previous orders computes Σ f(k) Aᵏ from k = 1 through n. Otherwise only f(n) Aⁿ is computed. Set order 1 and coefficient 3 for scalar multiplication by 3.
 - Enable the secondary series for a separately weighted B sum, then add the two results. Set both orders to 1 and both rules to 1 for ordinary A + B.
+- Press Enter to advance left to right, then to the next row. Shift+Enter moves back; the last cell stays selected. Clicking a cell or order selects its value for replacement.
+- Both series show separate function and sum previews; combining them also previews the full addition.
+- Expand Matrix A, Matrix B, or a calculated result for a large, scrollable view. Input matrices remain editable; results are read-only. Copy values exports tab-separated data for spreadsheets. Save PNG downloads the entire matrix at readable resolution, including off-screen rows and columns. Browser fullscreen is optional; Escape or Close returns to the workspace.
 - Calculate shows the result and row sums. Export CSV saves the displayed result, or the current input matrix when no result is displayed.
 
 Calculation uses JavaScript double-precision arithmetic; results display six significant digits and CSV retains underlying precision. Overflow is detected and reported. Inputs and operation settings are saved; results are recomputed with Calculate.
